@@ -566,7 +566,7 @@ def download_torsiondrive(
             print(f"Number of core entries: {core_dataset.n_results}")
     else:
         print('No core dataset')
-        core_dataset = {'entries': {key: []}}
+        core_dataset = TorsionDriveResultCollection(entries= {key: []})
 
     # Auxiliary TorsionDrives
     if len(aux_td_datasets) > 0:
@@ -588,7 +588,7 @@ def download_torsiondrive(
             print(f"Number of auxiliary entries: {aux_dataset.n_results}")
     else:
         print('No aux dataset')
-        aux_dataset = {'entries':{key:[]}}
+        aux_dataset = TorsionDriveResultCollection(entries={key:[]})
 
     if additional_td_records is not None:
         additional_records = list(
