@@ -356,7 +356,7 @@ def cli():
     "--core-td-dataset",
     "core_td_datasets",
     multiple=True,
-    required=True,
+    required=False,
     type=str,
     help="The name of a torsiondrive dataset to download.",
 )
@@ -364,7 +364,7 @@ def cli():
     "--aux-td-dataset",
     "aux_td_datasets",
     multiple=True,
-    required=True,
+    required=False,
     type=str,
     help="The name of a torsiondrive dataset to download.",
 )
@@ -541,15 +541,6 @@ def download_torsiondrive(
 
     ff = ForceField(initial_force_field, allow_cosmetic_attributes=True)
 
-    # Core TorsionDrives
-    core_dataset = download_and_filter_td_data(
-        core_td_datasets,
-        td_records_to_remove,
-        include_iodine=False,
-    )
-    if verbose:
-        print(f"Number of core entries: {core_dataset.n_results}")
-
     # Protein TorsionDrives
     protein_dataset = download_and_filter_td_data(
         protein_td_datasets,
@@ -561,23 +552,43 @@ def download_torsiondrive(
     if verbose:
         print(f"Number of protein entries: {protein_dataset.n_results}")
 
+
+    key = list(protein_dataset.entries.keys())[0]
+
+    # Core TorsionDrives
+    if len(core_td_datasets) > 0:
+        core_dataset = download_and_filter_td_data(
+            core_td_datasets,
+            td_records_to_remove,
+            include_iodine=False,
+        )
+        if verbose:
+            print(f"Number of core entries: {core_dataset.n_results}")
+    else:
+        print('No core dataset')
+        core_dataset = {'entries': {key: []}}
+
     # Auxiliary TorsionDrives
-    aux_dataset = download_and_filter_td_data(
-        aux_td_datasets,
-        td_records_to_remove,
-        include_iodine=False,
-    )
-    aux_dataset = cap_torsions_per_parameter(
-        ff,
-        aux_dataset,
-        cap_size=cap_size,
-        method=cap_method,
-        explicit_ring_torsion_path=explicit_ring_torsions,
-        verbose=verbose,
-        n_processes=n_processes,
-    )
-    if verbose:
-        print(f"Number of auxiliary entries: {aux_dataset.n_results}")
+    if len(aux_td_datasets) > 0:
+        aux_dataset = download_and_filter_td_data(
+            aux_td_datasets,
+            td_records_to_remove,
+            include_iodine=False,
+        )
+        aux_dataset = cap_torsions_per_parameter(
+            ff,
+            aux_dataset,
+            cap_size=cap_size,
+            method=cap_method,
+            explicit_ring_torsion_path=explicit_ring_torsions,
+            verbose=verbose,
+            n_processes=n_processes,
+        )
+        if verbose:
+            print(f"Number of auxiliary entries: {aux_dataset.n_results}")
+    else:
+        print('No aux dataset')
+        aux_dataset = {'entries':{key:[]}}
 
     if additional_td_records is not None:
         additional_records = list(
@@ -588,7 +599,6 @@ def download_torsiondrive(
     else:
         additional_records = []
 
-    key = list(core_dataset.entries.keys())[0]
     all_entries = (
         core_dataset.entries[key]
         + aux_dataset.entries[key]
@@ -722,7 +732,7 @@ def download_and_filter_opt_data(
     "--iodine-opt-dataset",
     "iodine_opt_datasets",
     multiple=True,
-    required=True,
+    required=False,
     type=str,
     help=(
         "The name of an optimization dataset to download. "
@@ -814,17 +824,22 @@ def download_optimization(
     if verbose:
         print(f"Number of filtered core entries: {core_dataset.n_results}")
 
-    iodine_dataset = download_and_filter_opt_data(
-        iodine_opt_datasets,
-        opt_records_to_remove,
-        include_iodine=True,
-        max_opt_conformers=max_opt_conformers,
-    )
-    if verbose:
-        print(f"Number of filtered aux entries: {iodine_dataset.n_results}")
 
     key = list(core_dataset.entries.keys())[0]
-    all_entries = core_dataset.entries[key] + iodine_dataset.entries[key]
+
+    if len(iodine_opt_datasets) > 0:
+        iodine_dataset = download_and_filter_opt_data(
+            iodine_opt_datasets,
+            opt_records_to_remove,
+            include_iodine=True,
+            max_opt_conformers=max_opt_conformers,
+        )
+        if verbose:
+            print(f"Number of filtered aux entries: {iodine_dataset.n_results}")
+
+        all_entries = core_dataset.entries[key] + iodine_dataset.entries[key]
+    else:
+        all_entries = core_dataset.entries[key]
 
     # filter in case we have doubled up records
     unique_entries = {record.record_id: record for record in all_entries}
