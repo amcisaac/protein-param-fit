@@ -26,9 +26,10 @@ from openff.qcsubmit.results.filters import (
     RecordStatusFilter,
     SinglepointRecordFilter,
     UnperceivableStereoFilter,
+    T
 )
 from openff.toolkit import ForceField, Molecule
-from openff.toolkit.utils.exceptions import UnassignedMoleculeChargeException
+from openff.toolkit.utils.exceptions import UnassignedMoleculeChargeException,ChargeCalculationError,ConformerGenerationError
 from qcportal import PortalClient
 from qcportal.optimization import OptimizationRecord
 from qcportal.record_models import RecordStatusEnum
@@ -38,6 +39,14 @@ from qcportal.torsiondrive import TorsiondriveRecord
 QCPortalRecord = OptimizationRecord | TorsiondriveRecord
 QCSubmitResult = OptimizationResult | TorsionDriveResult
 QCSubmitResultCollection = OptimizationResultCollection | TorsionDriveResultCollection
+
+
+# suppress stereochemistry warnings
+logging.getLogger("openff").setLevel(logging.ERROR)
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
 
 
 class ChargeCheckFilter(SinglepointRecordFilter):
@@ -62,6 +71,75 @@ class ChargeCheckFilter(SinglepointRecordFilter):
             can_be_charged = False
 
         return can_be_charged
+
+# Brent's multi-core filter
+def imap_fn(record_and_molecule):
+    """record here is actually only a record.id because the records maintain a
+    reference to a PortalClient, which cannot be pickled for multiprocessing.
+    """
+    from openff.toolkit.utils.toolkits import OpenEyeToolkitWrapper
+    record, molecule = record_and_molecule
+    try:
+        OpenEyeToolkitWrapper().assign_partial_charges(
+            molecule, partial_charge_method="am1bccelf10"
+        )
+    except (ChargeCalculationError, ConformerGenerationError):
+        ok = False
+    else:
+        ok = True
+
+    return record, ok
+
+class ChargeCheckFilterParallel(SinglepointRecordFilter):
+    nprocs: int = 1
+    chunksize: int = 1
+
+    # this is not needed now that I overrode _apply, and I need to pass along
+    # the record_id anyway, but pydantic requires it to be here
+    def _filter_function(self, result, record, molecule) -> bool:
+        raise NotImplementedError()
+
+    def _apply(self, result_collection: T) -> T:
+        """Copy of SinglepointRecordFilter._apply with added logging, progress
+        reporting, and eventually parallelism."""
+
+        all_records_and_molecules = defaultdict(list)
+
+        logger.info("starting to_records")
+
+        for record, molecule in result_collection.to_records():
+            all_records_and_molecules[record._client.address].append(
+                (record.id, molecule)
+            )
+
+        logger.info("finished to records")
+
+        filtered_results = {}
+
+        for address, entries in result_collection.entries.items():
+            records_and_molecules = all_records_and_molecules[address]
+
+            filtered_ids = []
+            with multiprocessing.Pool(processes=self.nprocs) as p:
+                for record_id, ok in tqdm.tqdm(
+                    p.imap(
+                        imap_fn,
+                        records_and_molecules,
+                        chunksize=self.chunksize,
+                    ),
+                    total=len(records_and_molecules),
+                    desc="Filtering charge errors",
+                ):
+                    if ok:
+                        filtered_ids.append(record_id)
+
+            filtered_results[address] = [
+                entry for entry in entries if entry.record_id in filtered_ids
+            ]
+
+        result_collection.entries = filtered_results
+
+        return result_collection
 
 
 def check_torsion_is_in_ring(
@@ -851,7 +929,7 @@ def download_optimization(
         print(f"Number of entries after deduplication: {new_dataset.n_results}")
 
     # Filter molecules that can't be assigned partial charges
-    filtered_for_charge = new_dataset.filter(ChargeCheckFilter())
+    filtered_for_charge = new_dataset.filter(ChargeCheckFilterParallel(nprocs=n_processes))
 
     if verbose:
         print(f"Number of entries after charge filter: {filtered_for_charge.n_results}")
